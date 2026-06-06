@@ -48,11 +48,7 @@ def retain_incident(incident_data: dict) -> bool:
     return response.status_code in (200, 201)
 
 def delete_all_memories() -> bool:
-    """
-    Deletes all documents from the memory bank so fresh ingestion can begin.
-    """
     bank_id = get_bank_id()
-    # First list all documents to get their IDs
     url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
     response = requests.get(url, headers=get_headers())
     if response.status_code != 200:
@@ -62,9 +58,8 @@ def delete_all_memories() -> bool:
     raw_memories = data.get("items") or data.get("memories") or []
 
     if not raw_memories:
-        return True  # already empty
+        return True
 
-    # Delete each document by ID
     deleted = 0
     for mem in raw_memories:
         doc_id = mem.get("id")
@@ -75,7 +70,6 @@ def delete_all_memories() -> bool:
         if del_response.status_code in (200, 204):
             deleted += 1
 
-    # Fallback: try bulk delete endpoint if individual deletes didn't work
     if deleted == 0:
         bulk_url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
         bulk_response = requests.delete(bulk_url, headers=get_headers())
@@ -101,69 +95,10 @@ def recall_incidents(query: str, limit: int = 3) -> list:
         for mem in raw_memories:
             content_str = mem.get("content", "")
             relevance = mem.get("relevance_score", mem.get("score", 0.0))
-            metadata = mem.get("metadata")
 
             parsed_incidents.append({
                 "id": mem.get("id"),
                 "content": content_str,
                 "relevance_score": relevance,
-                "structured": metadata if metadata else parse_retained_content(content_str)
+                "structured": parse_retained_content(content_str)
             })
-        return parsed_incidents
-    else:
-        response.raise_for_status()
-        return []
-
-def list_memories() -> list:
-    bank_id = get_bank_id()
-    url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
-
-    response = requests.get(url, headers=get_headers())
-    if response.status_code == 200:
-        data = response.json()
-        raw_memories = data.get("items") or data.get("memories") or []
-
-        parsed_incidents = []
-        for mem in raw_memories:
-            content_str = (mem.get("original_text") or mem.get("content")
-                           or mem.get("text") or mem.get("document") or "")
-            metadata = mem.get("metadata")
-
-            parsed_incidents.append({
-                "id": mem.get("id"),
-                "content": content_str,
-                "structured": metadata if metadata else parse_retained_content(content_str)
-            })
-        return parsed_incidents
-    else:
-        response.raise_for_status()
-        return []
-
-def parse_retained_content(content_str: str) -> dict:
-    lines = content_str.strip().split("\n")
-    parsed = {}
-    for line in lines:
-        if ":" in line:
-            key, val = line.split(":", 1)
-            key = key.strip().lower().replace(" ", "_")
-            parsed[key] = val.strip()
-
-    required_keys = ["service_affected", "symptom_pattern", "root_cause", "fix_applied"]
-    if not any(k in parsed for k in required_keys):
-        return {
-            "service_affected": "Legacy / Unstructured",
-            "symptom_pattern": "N/A",
-            "root_cause": content_str,
-            "fix_applied": "N/A",
-            "time_to_resolve_minutes": 0
-        }
-
-    if "time_to_resolve" in parsed:
-        time_str = parsed["time_to_resolve"].replace("minutes", "").strip()
-        try:
-            parsed["time_to_resolve_minutes"] = int(time_str)
-        except ValueError:
-            parsed["time_to_resolve_minutes"] = 0
-
-    parsed.setdefault("time_to_resolve_minutes", 0)
-    return parsed
