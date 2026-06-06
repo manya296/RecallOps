@@ -3,13 +3,11 @@ import json
 import os
 import requests
 from dotenv import load_dotenv
-from hindsight import retain_incident, recall_incidents, list_memories
+from hindsight import retain_incident, recall_incidents, list_memories, delete_all_memories
 from llm import extract_structure, generate_triage_brief
 
-# Load environment variables
 load_dotenv()
 
-# Set up page configurations
 st.set_page_config(
     page_title="RecallOps | Intelligent Incident Memory Bank",
     page_icon="🧠",
@@ -17,23 +15,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom styling for a modern, high-end look
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
     
-    /* Apply globally */
     html, body, [class*="css"], .stText, .stMarkdown, .stButton, .stTextInput, .stTextArea {
         font-family: 'Outfit', sans-serif !important;
     }
     
-    /* App background */
     .stApp {
         background-color: #0a0b10;
         color: #e2e8f0;
     }
     
-    /* Incident Card Container */
     .incident-card {
         background: rgba(22, 24, 38, 0.8);
         border: 1px solid rgba(255, 255, 255, 0.05);
@@ -72,7 +66,6 @@ st.markdown("""
         color: #f1f5f9;
     }
     
-    /* Badges */
     .badge-container {
         display: flex;
         gap: 8px;
@@ -108,13 +101,11 @@ st.markdown("""
         border-color: rgba(16, 185, 129, 0.3);
     }
     
-    /* Sidebar Styling */
     section[data-testid="stSidebar"] {
         background-color: #06070a !important;
         border-right: 1px solid rgba(255, 255, 255, 0.05);
     }
     
-    /* Custom headers and title */
     .app-title {
         font-size: 2.5rem;
         font-weight: 800;
@@ -130,7 +121,6 @@ st.markdown("""
         margin-bottom: 30px;
     }
     
-    /* Textareas and inputs */
     div[data-baseweb="textarea"] textarea, div[data-baseweb="input"] input {
         background-color: #141622 !important;
         color: #f1f5f9 !important;
@@ -144,7 +134,6 @@ st.markdown("""
         box-shadow: 0 0 0 1px #6366f1 !important;
     }
     
-    /* Streamlit button custom styles */
     .stButton>button {
         background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
         color: white !important;
@@ -161,7 +150,6 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(79, 70, 229, 0.5) !important;
     }
     
-    /* Triage Brief Box */
     .brief-box {
         background: linear-gradient(180deg, rgba(30, 41, 59, 0.25) 0%, rgba(15, 23, 42, 0.25) 100%);
         border-left: 4px solid #6366f1;
@@ -175,21 +163,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Helper to verify credentials
 def credentials_present():
     groq_ok = bool(os.getenv("GROQ_API_KEY"))
     hindsight_ok = bool(os.getenv("HINDSIGHT_API_KEY"))
     hindsight_pipe_ok = bool(os.getenv("HINDSIGHT_PIPELINE_ID"))
     return groq_ok and hindsight_ok and hindsight_pipe_ok
 
-# Sidebar Navigation
 with st.sidebar:
     st.image("https://img.icons8.com/nolan/96/artificial-intelligence.png", width=80)
     st.markdown("<h2 style='margin-top:0;'>RecallOps</h2>", unsafe_allow_html=True)
     st.markdown("---")
     
     page = st.radio(
-        "Navigate", 
+        "Navigate",
         ["📥 Log Incident", "🚨 Triage Alert", "🧠 Memory Bank"],
         index=0
     )
@@ -203,29 +189,50 @@ with st.sidebar:
         st.warning("⚠️ Credentials Incomplete")
         st.info("Please complete the .env file with your API keys.")
 
-# Main Application Pages
+# ─── LOG INCIDENT ───────────────────────────────────────────────────────────
 if page == "📥 Log Incident":
     st.markdown("<div class='app-title'>Log a Post-Mortem</div>", unsafe_allow_html=True)
     st.markdown("<div class='app-subtitle'>Ingest Slack logs, error logs, or post-mortem descriptions. Groq will structure the details, and Hindsight will record them.</div>", unsafe_allow_html=True)
-    
+
     if not credentials_present():
         st.error("Please configure your `.env` file first with valid keys to use this feature.")
     else:
-        # User input area
         raw_input = st.text_area(
-            "Raw Incident Notes / Slack Transcript", 
-            height=200, 
+            "Raw Incident Notes / Slack Transcript",
+            height=200,
             placeholder="e.g. prod database went down at 3pm, lots of connection errors. Priya rolled back auth-service and bumped pool size from 10 to 50. Took 9 minutes to stabilize."
         )
-        
-        col1, col2 = st.columns([1, 4])
+
+        col1, col2, col3 = st.columns([1, 2, 2])
         with col1:
             submit_btn = st.button("Extract & Remember")
-            
         with col2:
-            # Add helper option to bulk load mock incidents
+            nuke_btn = st.button("🗑️ Clear & Reload Fresh")
+        with col3:
             bulk_load_btn = st.button("📥 Load 20 Mock Incidents")
-            
+
+        if nuke_btn:
+            try:
+                with st.spinner("🗑️ Clearing old memories..."):
+                    delete_all_memories()
+
+                incidents_file = "data/incidents.json"
+                with open(incidents_file, "r") as f:
+                    mock_incidents = json.load(f)
+
+                my_bar = st.progress(0, text="Re-ingesting fresh data...")
+                success_count = 0
+                total = len(mock_incidents)
+                for idx, inc in enumerate(mock_incidents):
+                    if retain_incident(inc):
+                        success_count += 1
+                    my_bar.progress((idx + 1) / total)
+
+                my_bar.empty()
+                st.success(f"✅ Fresh load complete! {success_count}/{total} incidents stored with metadata.")
+            except Exception as e:
+                st.error(f"Clear & Reload failed: {str(e)}")
+
         if submit_btn:
             if not raw_input.strip():
                 st.warning("Please enter some incident details to process.")
@@ -233,20 +240,20 @@ if page == "📥 Log Incident":
                 try:
                     with st.spinner("🧠 LLM is extracting structure..."):
                         structured = extract_structure(raw_input)
-                    
+
                     st.subheader("Extracted Details")
                     st.json(structured)
-                    
+
                     with st.spinner("💾 Committing to Hindsight memory bank..."):
                         success = retain_incident(structured)
-                        
+
                     if success:
                         st.success("✅ Incident committed to memory successfully!")
                     else:
                         st.error("Failed to commit incident to Hindsight memory.")
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
-                    
+
         if bulk_load_btn:
             try:
                 incidents_file = "data/incidents.json"
@@ -255,36 +262,35 @@ if page == "📥 Log Incident":
                 else:
                     with open(incidents_file, "r") as f:
                         mock_incidents = json.load(f)
-                        
-                    progress_text = "Ingesting mock data..."
-                    my_bar = st.progress(0, text=progress_text)
-                    
+
+                    my_bar = st.progress(0, text="Ingesting mock data...")
                     success_count = 0
                     total = len(mock_incidents)
                     for idx, inc in enumerate(mock_incidents):
                         with st.spinner(f"Ingesting incident {idx+1}/{total}..."):
                             if retain_incident(inc):
                                 success_count += 1
-                        my_bar.progress((idx + 1) / total, text=progress_text)
-                        
+                        my_bar.progress((idx + 1) / total)
+
                     my_bar.empty()
                     st.success(f"✅ Ingestion complete! Successfully loaded {success_count}/{total} mock incidents into memory.")
             except Exception as e:
                 st.error(f"Bulk load failed: {str(e)}")
 
+# ─── TRIAGE ALERT ────────────────────────────────────────────────────────────
 elif page == "🚨 Triage Alert":
     st.markdown("<div class='app-title'>Triage Incoming Alert</div>", unsafe_allow_html=True)
     st.markdown("<div class='app-subtitle'>Paste an active production alert. We will query hindsight memory and generate an actionable triage brief.</div>", unsafe_allow_html=True)
-    
+
     if not credentials_present():
         st.error("Please configure your `.env` file first with valid keys to use this feature.")
     else:
         alert_input = st.text_area(
-            "Alert Text", 
+            "Alert Text",
             height=120,
             placeholder="e.g. ALERT: auth-service CPU usage exceeded 90% for 5 mins, connection pool exhausted"
         )
-        
+
         if st.button("Analyze & Resolve"):
             if not alert_input.strip():
                 st.warning("Please paste an alert to analyze.")
@@ -292,18 +298,18 @@ elif page == "🚨 Triage Alert":
                 try:
                     with st.spinner("🔍 Retrieving semantically similar incidents from Hindsight..."):
                         similar = recall_incidents(alert_input, limit=3)
-                        
+
                     if not similar:
                         st.info("No matching historical incidents found in memory. Generating generic advice.")
-                    
+
                     with st.spinner("🤖 Synthesizing resolution brief..."):
                         brief = generate_triage_brief(alert_input, similar)
-                        
+
                     st.markdown("<div class='brief-box'>", unsafe_allow_html=True)
                     st.subheader("📋 Triage Brief")
                     st.markdown(brief)
                     st.markdown("</div>", unsafe_allow_html=True)
-                    
+
                     st.subheader("📂 Relevant Historical Incidents")
                     if not similar:
                         st.write("Memory is currently empty. Go to **Log Incident** to load records.")
@@ -311,7 +317,7 @@ elif page == "🚨 Triage Alert":
                         for inc in similar:
                             struct = inc.get("structured", {})
                             rel_pct = inc.get("relevance_score", 0.0) * 100
-                            
+
                             st.markdown(f"""
                             <div class="incident-card">
                                 <div class="incident-title">📍 {struct.get('service_affected', 'Unknown Service').upper()}</div>
@@ -337,41 +343,39 @@ elif page == "🚨 Triage Alert":
                 except Exception as e:
                     st.error(f"Analysis failed: {str(e)}")
 
+# ─── MEMORY BANK ─────────────────────────────────────────────────────────────
 elif page == "🧠 Memory Bank":
     st.markdown("<div class='app-title'>Memory Bank</div>", unsafe_allow_html=True)
     st.markdown("<div class='app-subtitle'>Inspect the collective memory currently stored in your Hindsight Cloud vector engine.</div>", unsafe_allow_html=True)
-    
+
     if not credentials_present():
         st.error("Please configure your `.env` file first with valid keys to view this page.")
     else:
         try:
             with st.spinner("Fetching memories..."):
                 memories = list_memories()
-                
+
             total_memories = len(memories)
-            
+
             col1, col2 = st.columns([2, 5])
             with col1:
                 st.metric("Total Incidents in Memory", f"{total_memories}")
-            
             with col2:
-                # Add a filter option by service name
                 services = sorted(list(set(
                     mem.get("structured", {}).get("service_affected", "Unknown") for mem in memories
                 )))
                 services = ["All Services"] + services
                 filter_service = st.selectbox("Filter by Service", services)
-                
-            # Filter memories
+
             if filter_service != "All Services":
                 filtered_memories = [
                     m for m in memories if m.get("structured", {}).get("service_affected") == filter_service
                 ]
             else:
                 filtered_memories = memories
-                
+
             st.write("---")
-            
+
             if not filtered_memories:
                 st.info("No memories found. Go to **Log Incident** to load data or run bulk load.")
             else:
@@ -398,7 +402,7 @@ elif page == "🧠 Memory Bank":
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
-                    
+
         except Exception as e:
             st.error(f"Failed to load memory bank: {str(e)}")
             st.info("Ensure that HINDSIGHT_API_KEY and HINDSIGHT_PIPELINE_ID are correct, and your network connection is active.")
