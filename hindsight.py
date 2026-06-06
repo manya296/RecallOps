@@ -47,6 +47,42 @@ def retain_incident(incident_data: dict) -> bool:
     response = requests.post(url, headers=get_headers(), json=payload)
     return response.status_code in (200, 201)
 
+def delete_all_memories() -> bool:
+    """
+    Deletes all documents from the memory bank so fresh ingestion can begin.
+    """
+    bank_id = get_bank_id()
+    # First list all documents to get their IDs
+    url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
+    response = requests.get(url, headers=get_headers())
+    if response.status_code != 200:
+        return False
+
+    data = response.json()
+    raw_memories = data.get("items") or data.get("memories") or []
+
+    if not raw_memories:
+        return True  # already empty
+
+    # Delete each document by ID
+    deleted = 0
+    for mem in raw_memories:
+        doc_id = mem.get("id")
+        if not doc_id:
+            continue
+        del_url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents/{doc_id}"
+        del_response = requests.delete(del_url, headers=get_headers())
+        if del_response.status_code in (200, 204):
+            deleted += 1
+
+    # Fallback: try bulk delete endpoint if individual deletes didn't work
+    if deleted == 0:
+        bulk_url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
+        bulk_response = requests.delete(bulk_url, headers=get_headers())
+        return bulk_response.status_code in (200, 204)
+
+    return True
+
 def recall_incidents(query: str, limit: int = 3) -> list:
     bank_id = get_bank_id()
     url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/memories/recall"
