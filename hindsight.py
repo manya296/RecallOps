@@ -28,12 +28,11 @@ def retain_incident(incident_data: dict) -> bool:
     """
     Store an incident in Hindsight memory.
     Endpoint: POST /v1/default/banks/{bank_id}/memories
-    Payload:  { "items": [{ "content": "..." }] }
+    Uses 'context' field to preserve structured metadata even after Hindsight rewrites content.
     """
     bank_id = get_bank_id()
     url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/memories"
 
-    # Use natural language content as recommended by the docs
     content = (
         f"Service Affected: {incident_data.get('service_affected')}. "
         f"Symptom Pattern: {incident_data.get('symptom_pattern')}. "
@@ -42,12 +41,20 @@ def retain_incident(incident_data: dict) -> bool:
         f"Time to Resolve: {incident_data.get('time_to_resolve_minutes')} minutes."
     )
 
+    # Store structured fields in context so they survive Hindsight's rewriting
+    context = (
+        f"service_affected={incident_data.get('service_affected')} | "
+        f"symptom_pattern={incident_data.get('symptom_pattern')} | "
+        f"root_cause={incident_data.get('root_cause')} | "
+        f"fix_applied={incident_data.get('fix_applied')} | "
+        f"time_to_resolve_minutes={incident_data.get('time_to_resolve_minutes', 0)}"
+    )
+
     payload = {
         "items": [
             {
-                "content": content
-                # Note: the official API does not support a "metadata" field on items
-                # per the docs — only "content", "context", and "timestamp"
+                "content": content,
+                "context": context
             }
         ]
     }
@@ -64,7 +71,6 @@ def recall_incidents(query: str, limit: int = 3) -> list:
     """
     Retrieve relevant incidents from Hindsight memory.
     Endpoint: POST /v1/default/banks/{bank_id}/memories/recall
-    Response fields: results[].text, results[].type, results[].id
     """
     bank_id = get_bank_id()
     url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/memories/recall"
@@ -81,21 +87,19 @@ def recall_incidents(query: str, limit: int = 3) -> list:
         return []
 
     data = response.json()
-    # Docs say response key is "results", not "memories" or "items"
     raw_memories = data.get("results") or []
 
     parsed_incidents = []
     for mem in raw_memories:
-        # Docs use "text" not "content"
         content_str = mem.get("text", "")
-        # Docs don't return a relevance_score field — using a default
+        context_str = mem.get("context", "")
         relevance = mem.get("relevance_score", mem.get("score", 0.0))
 
         parsed_incidents.append({
             "id": mem.get("id"),
             "content": content_str,
             "relevance_score": relevance,
-            "structured": parse_retained_content(content_str)
+            "structured": parse_retained_content(content_str, context_str)
         })
 
     return parsed_incidents
@@ -103,9 +107,7 @@ def recall_incidents(query: str, limit: int = 3) -> list:
 
 def list_memories() -> list:
     """
-    List all memories by doing a broad recall query.
-    There is no dedicated list endpoint in the Hindsight API,
-    so we use recall with a general incident-related query.
+    List all memories via a broad recall query.
     """
     bank_id = get_bank_id()
     url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/memories/recall"
@@ -127,10 +129,11 @@ def list_memories() -> list:
     parsed_incidents = []
     for mem in raw_memories:
         content_str = mem.get("text", "")
+        context_str = mem.get("context", "")
         parsed_incidents.append({
             "id": mem.get("id"),
             "content": content_str,
-            "structured": parse_retained_content(content_str)
+            "structured": parse_retained_content(content_str, context_str)
         })
 
     return parsed_incidents
@@ -138,13 +141,10 @@ def list_memories() -> list:
 
 def delete_all_memories() -> bool:
     """
-    Delete all memories. The Hindsight docs don't document a bulk delete endpoint,
-    so this attempts individual deletion via the documents endpoint.
-    If that fails it tries a bulk DELETE on the documents endpoint.
+    Delete all memories via the documents endpoint.
     """
     bank_id = get_bank_id()
 
-    # First, get all stored documents
     list_url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
     response = requests.get(list_url, headers=get_headers())
 
@@ -169,7 +169,6 @@ def delete_all_memories() -> bool:
             deleted += 1
 
     if deleted == 0:
-        # Fallback: try bulk delete
         bulk_url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
         bulk_response = requests.delete(bulk_url, headers=get_headers())
         return bulk_response.status_code in (200, 204)
@@ -177,15 +176,40 @@ def delete_all_memories() -> bool:
     return True
 
 
-def parse_retained_content(content_str: str) -> dict:
+def parse_retained_content(content_str: str, context_str: str = "") -> dict:
     """
-    Parse a retained memory string back into a structured dict.
-    Handles both '. ' separated (new format) and '\n' separated (old format).
+    Parse a memory back into structured fields.
+
+    Priority 1: Parse from context field (pipe-separated key=value pairs).
+                 This is reliable since we wrote it ourselves.
+    Priority 2: Parse from content_str (key: value lines).
+    Priority 3: Extract service name from natural language via keyword matching.
     """
-    # Normalize both formats
+
+    # --- Priority 1: Parse from context field ---
+    if context_str and "=" in context_str:
+        parsed = {}
+        parts = context_str.split("|")
+        for part in parts:
+            part = part.strip()
+            if "=" in part:
+                key, val = part.split("=", 1)
+                parsed[key.strip()] = val.strip()
+
+        if any(k in parsed for k in ["service_affected", "root_cause", "fix_applied"]):
+            try:
+                parsed["time_to_resolve_minutes"] = int(parsed.get("time_to_resolve_minutes", 0))
+            except (ValueError, TypeError):
+                parsed["time_to_resolve_minutes"] = 0
+            parsed.setdefault("symptom_pattern", "N/A")
+            parsed.setdefault("service_affected", "Unknown")
+            parsed.setdefault("root_cause", "N/A")
+            parsed.setdefault("fix_applied", "N/A")
+            return parsed
+
+    # --- Priority 2: Parse from content key: value lines ---
     normalized = content_str.replace(". ", "\n").strip()
     lines = normalized.split("\n")
-
     parsed = {}
     for line in lines:
         if ":" in line:
@@ -193,22 +217,35 @@ def parse_retained_content(content_str: str) -> dict:
             key = key.strip().lower().replace(" ", "_")
             parsed[key] = val.strip().rstrip(".")
 
-    required_keys = ["service_affected", "symptom_pattern", "root_cause", "fix_applied"]
-    if not any(k in parsed for k in required_keys):
-        return {
-            "service_affected": "Legacy / Unstructured",
-            "symptom_pattern": "N/A",
-            "root_cause": content_str,
-            "fix_applied": "N/A",
-            "time_to_resolve_minutes": 0
-        }
-
-    if "time_to_resolve" in parsed:
-        time_str = parsed["time_to_resolve"].replace("minutes", "").strip()
+    if any(k in parsed for k in ["service_affected", "root_cause", "fix_applied"]):
         try:
-            parsed["time_to_resolve_minutes"] = int(time_str)
-        except ValueError:
+            parsed["time_to_resolve_minutes"] = int(
+                parsed.get("time_to_resolve", "0").replace("minutes", "").strip()
+            )
+        except (ValueError, TypeError):
             parsed["time_to_resolve_minutes"] = 0
+        parsed.setdefault("symptom_pattern", "N/A")
+        parsed.setdefault("service_affected", "Unknown")
+        parsed.setdefault("root_cause", "N/A")
+        parsed.setdefault("fix_applied", "N/A")
+        return parsed
 
-    parsed.setdefault("time_to_resolve_minutes", 0)
-    return parsed
+    # --- Priority 3: Natural language fallback — keyword extraction ---
+    text = content_str.lower()
+    service = "Unknown Service"
+    for keyword in [
+        "auth-service", "payment-service", "api-gateway", "redis",
+        "database", "postgres", "frontend", "backend", "worker",
+        "cache", "queue", "storage", "cdn", "load-balancer"
+    ]:
+        if keyword in text:
+            service = keyword
+            break
+
+    return {
+        "service_affected": service,
+        "symptom_pattern": "N/A",
+        "root_cause": content_str,
+        "fix_applied": "N/A",
+        "time_to_resolve_minutes": 0
+    }
