@@ -102,3 +102,60 @@ def recall_incidents(query: str, limit: int = 3) -> list:
                 "relevance_score": relevance,
                 "structured": parse_retained_content(content_str)
             })
+        return parsed_incidents
+    else:
+        response.raise_for_status()
+        return []
+
+def list_memories() -> list:
+    bank_id = get_bank_id()
+    url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/memories/recall"
+
+    payload = {"query": "service incident root cause fix applied", "limit": 50}
+
+    response = requests.post(url, headers=get_headers(), json=payload)
+    if response.status_code in (200, 201):
+        data = response.json()
+        raw_memories = data.get("memories") or data.get("items") or []
+
+        parsed_incidents = []
+        for mem in raw_memories:
+            content_str = mem.get("content", "")
+            parsed_incidents.append({
+                "id": mem.get("id"),
+                "content": content_str,
+                "structured": parse_retained_content(content_str)
+            })
+        return parsed_incidents
+    else:
+        response.raise_for_status()
+        return []
+
+def parse_retained_content(content_str: str) -> dict:
+    lines = content_str.strip().split("\n")
+    parsed = {}
+    for line in lines:
+        if ":" in line:
+            key, val = line.split(":", 1)
+            key = key.strip().lower().replace(" ", "_")
+            parsed[key] = val.strip()
+
+    required_keys = ["service_affected", "symptom_pattern", "root_cause", "fix_applied"]
+    if not any(k in parsed for k in required_keys):
+        return {
+            "service_affected": "Legacy / Unstructured",
+            "symptom_pattern": "N/A",
+            "root_cause": content_str,
+            "fix_applied": "N/A",
+            "time_to_resolve_minutes": 0
+        }
+
+    if "time_to_resolve" in parsed:
+        time_str = parsed["time_to_resolve"].replace("minutes", "").strip()
+        try:
+            parsed["time_to_resolve_minutes"] = int(time_str)
+        except ValueError:
+            parsed["time_to_resolve_minutes"] = 0
+
+    parsed.setdefault("time_to_resolve_minutes", 0)
+    return parsed
