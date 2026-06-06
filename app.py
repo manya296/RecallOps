@@ -211,13 +211,13 @@ if page == "📥 Log Incident":
         with col3:
             bulk_load_btn = st.button("📥 Load 20 Mock Incidents")
         if st.button("🔍 Debug: Show Raw API Response"):
-        bank_id = os.getenv("HINDSIGHT_PIPELINE_ID")
-        api_key = os.getenv("HINDSIGHT_API_KEY")
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        url = f"https://api.hindsight.vectorize.io/v1/default/banks/{bank_id}/documents"
-        r = requests.get(url, headers=headers)
-        st.write("Status:", r.status_code)
-        st.json(r.json())
+            bank_id = os.getenv("HINDSIGHT_PIPELINE_ID")
+            api_key = os.getenv("HINDSIGHT_API_KEY")
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            url = f"https://api.hindsight.vectorize.io/v1/default/banks/{bank_id}/documents"
+            r = requests.get(url, headers=headers)
+            st.write("Status:", r.status_code)
+            st.json(r.json())
    
         if nuke_btn:
             try:
