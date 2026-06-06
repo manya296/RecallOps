@@ -25,7 +25,7 @@ def get_bank_id():
 
 def retain_incident(incident_data: dict) -> bool:
     bank_id = get_bank_id()
-    url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/memories"
+    url = f"{HINDSIGHT_API_URL}/v1/default/banks/{bank_id}/documents"
 
     content = (
         f"Service Affected: {incident_data.get('service_affected')}\n"
